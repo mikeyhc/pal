@@ -181,18 +181,41 @@ crew_info(sqlite3 *db)
 			NULL);
 }
 
-void
-module_info()
+int
+module_info_callback(void *vcounter, int cols, char **vals, char **names)
 {
-	int i;
+	int *counter = vcounter;
+	if (*counter > 0 && *counter % 3 == 0)
+		addch('\n');
+	printw("%25s  [%s]", vals[0], vals[1]);
+	(*counter)++;
+
+	return 0;
+}
+
+int
+module_info_header(void *vcounter, int cols, char **vals, char **names)
+{
+	int *counter = vcounter;
+	int max_modules = atoi(vals[0]);
+
+	mvprintw(13, 0, "Installed Modules (%d free):\n",
+			max_modules - *counter);
+	return 0;
+}
+
+void
+module_info(sqlite3 *db)
+{
+	int counter = 0;
 	char *modules[] = MODULES;
 
-	mvprintw(13, 0, "Installed Modules (0 free):\n");
-	for (i = 0; modules[i]; i++) {
-		if (i > 0 && i % 3 == 0)
-			addch('\n');
-		printw("%25s  [OK]", modules[i]);
-	}
+	move(14, 0);
+	sqlite3_exec(db, "SELECT * FROM modules", &module_info_callback,
+			&counter, NULL);
+	sqlite3_exec(db, "SELECT value FROM properties "
+			"WHERE name = 'ship.max_modules'", &module_info_header,
+			&counter, NULL);
 }
 
 void
@@ -238,7 +261,7 @@ load_ui(sqlite3 *db)
 	ship_info(db);
 	crew_info(db);
 	cost_info(db);
-	module_info();
+	module_info(db);
 	feature_info();
 	cargo_info();
 	error_info();
