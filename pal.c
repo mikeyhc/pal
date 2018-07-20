@@ -6,18 +6,6 @@
 #include <string.h>
 #include <sqlite3.h>
 
-#define CARGO { \
-	{ "Batou's Exo Shell", 1 },	\
-	{ "Advanced Parts", 2 },	\
-	{ "Ordinary Parts", 4 },	\
-	{ 0, 0 }			\
-}
-
-typedef struct {
-	char *name;
-	unsigned count;
-} Cargo;
-
 typedef struct {
 	char name[30];
 	char status[16];
@@ -220,18 +208,26 @@ feature_info(sqlite3 *db)
 			&counter, NULL);
 }
 
-void
-cargo_info()
+int
+cargo_info_callback(void *vcounter, int cols, char **vals, char **names)
 {
-	int i;
-	Cargo cargo[] = CARGO;
+	int *counter = vcounter;
+	if (*counter > 0 && *counter % 3 == 0)
+		addch('\n');
+	printw("%25s  [%2s]", vals[0], vals[1]);
+	(*counter)++;
+
+	return 0;
+}
+
+void
+cargo_info(sqlite3 *db)
+{
+	int counter = 0;
 
 	mvprintw(22, 0, "Cargo Contents:\n");
-	for (i = 0; cargo[i].name; i++) {
-		if (i > 0 && i % 3 == 0)
-			addch('\n');
-		printw("%25s  [%2d]", cargo[i].name, cargo[i].count);
-	}
+	sqlite3_exec(db, "SELECT * FROM cargo", &cargo_info_callback,
+			&counter, NULL);
 }
 
 void
@@ -251,7 +247,7 @@ load_ui(sqlite3 *db)
 	cost_info(db);
 	module_info(db);
 	feature_info(db);
-	cargo_info();
+	cargo_info(db);
 	error_info();
 
 	refresh();
