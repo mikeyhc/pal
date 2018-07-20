@@ -2,9 +2,13 @@
 #include <locale.h>
 #include <math.h>
 #include <ncurses.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <unistd.h>
+
+#define TIMEOUT 500
 
 typedef struct {
 	char name[30];
@@ -257,17 +261,31 @@ int
 main(int argc, char **argv)
 {
 	sqlite3 *db;
+	struct pollfd ufds[1];
+	int running = 1, ready;
+	char c;
 
 	setlocale(LC_ALL, "");
 	assert(!sqlite3_open("pal.db", &db));
+
+	ufds[0].fd = STDIN_FILENO;
+	ufds[0].events = POLLIN;
+
 	initscr();
 	cbreak();
 	keypad(stdscr, 1);
-	timeout(500);
 
 	load_ui(db);
-	while (getch() != 'q')
+	while (1) {
+		assert(poll(ufds, 1, TIMEOUT) >= 0);
+		if (ufds[0].revents & POLLIN) {
+			read(STDIN_FILENO, &c, 1);
+			mvprintw(LINES - 2, 0, "got char %c\n", c);
+			if (c == 'q')
+				break;
+		}
 		load_ui(db);
+	}
 
 	endwin();
 	sqlite3_close(db);
