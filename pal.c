@@ -2,9 +2,13 @@
 #include <locale.h>
 #include <math.h>
 #include <ncurses.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <unistd.h>
+
+#define TIMEOUT 500
 
 typedef struct {
 	char name[30];
@@ -18,6 +22,11 @@ typedef struct {
 	unsigned overhaul_standard;
 	unsigned overhaul_advanced;
 } Costs;
+
+typedef enum {
+	UI_DEFAULT,
+	UI_BATTLE
+} UIType;
 
 void render_bar(char *name, int current, int total)
 {
@@ -233,14 +242,13 @@ cargo_info(sqlite3 *db)
 void
 error_info()
 {
-	mvprintw(LINES - 1, 0,
+	mvprintw(LINES - 2, 0,
 			"+++ ERROR +++ I AM COLD AND ALONE +++ ERROR +++");
 }
 
 void
-load_ui(sqlite3 *db)
+load_default_ui(sqlite3 *db)
 {
-
 	move(0, 0);
 	ship_info(db);
 	crew_info(db);
@@ -253,21 +261,69 @@ load_ui(sqlite3 *db)
 	refresh();
 }
 
+void
+load_nav_ui()
+{
+	move(LINES - 1, 0);
+	printw(" F1 ");
+	attron(A_REVERSE);
+	printw(" Ship ");
+	attroff(A_REVERSE);
+
+}
+
 int
 main(int argc, char **argv)
 {
 	sqlite3 *db;
+	struct pollfd ufds[1];
+	int running = 1, ready;
+	char c;
+	UIType ui;
 
 	setlocale(LC_ALL, "");
 	assert(!sqlite3_open("pal.db", &db));
+
+	ufds[0].fd = STDIN_FILENO;
+	ufds[0].events = POLLIN;
+
 	initscr();
 	cbreak();
 	keypad(stdscr, 1);
 
-	load_ui(db);
-	while (getch() != 'q')
-		load_ui(db);
+	load_default_ui(db);
+	load_nav_ui();
+	while (1) {
+		assert(poll(ufds, 1, TIMEOUT) >= 0);
+		if (ufds[0].revents & POLLIN) {
+			read(STDIN_FILENO, &c, 1);
+			mvprintw(LINES - 2, 0, "got char %c\n", c);
+			switch (c) {
+			case 'q':
+				goto END;
+				break;
+			case 'b':
+				ui = UI_BATTLE;
+				break;
+			case 's':
+				ui = UI_DEFAULT;
+				break;
+			}
+		}
 
+		switch (ui) {
+		case UI_DEFAULT:
+			load_default_ui(db);
+			break;
+		case UI_BATTLE:
+			/* TODO: create a battle UI */
+			load_default_ui(db);
+			break;
+		}
+		load_nav_ui();
+	}
+
+END:
 	endwin();
 	sqlite3_close(db);
 	return 0;
