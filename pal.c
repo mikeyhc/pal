@@ -6,19 +6,6 @@
 #include <string.h>
 #include <sqlite3.h>
 
-#define MODULES { \
-	"Medlab",	\
-	"Docking Station",	\
-	"Hanger",		\
-	"Cargo Hold",		\
-	"Service Station",	\
-	"Statis Hold",		\
-	"Workshop",		\
-	"Data Meme",		\
-	"Autocannon",		\
-	"Heavy Accelerator",	\
-	0			\
-}
 #define FEATURES { \
 	"Supercharged Reactor",	\
 	"Atmospheric Entry",	\
@@ -208,7 +195,6 @@ void
 module_info(sqlite3 *db)
 {
 	int counter = 0;
-	char *modules[] = MODULES;
 
 	move(14, 0);
 	sqlite3_exec(db, "SELECT * FROM modules", &module_info_callback,
