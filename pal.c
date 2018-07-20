@@ -263,6 +263,7 @@ main(int argc, char **argv)
 	initscr();
 	cbreak();
 	keypad(stdscr, 1);
+	timeout(500);
 
 	load_ui(db);
 	while (getch() != 'q')
