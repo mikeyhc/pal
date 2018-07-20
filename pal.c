@@ -6,12 +6,6 @@
 #include <string.h>
 #include <sqlite3.h>
 
-#define FEATURES { \
-	"Supercharged Reactor",	\
-	"Atmospheric Entry",	\
-	0			\
-}
-
 #define CARGO { \
 	{ "Batou's Exo Shell", 1 },	\
 	{ "Advanced Parts", 2 },	\
@@ -204,18 +198,26 @@ module_info(sqlite3 *db)
 			&counter, NULL);
 }
 
-void
-feature_info()
+int
+feature_info_callback(void *vcounter, int cols, char **vals, char **names)
 {
-	int i;
-	char *features[] = FEATURES;
+	int *counter = vcounter;
+	if (*counter > 0 && *counter % 3 == 0)
+		addch('\n');
+	printw("%25s  [%s]", vals[0], vals[1]);
+	(*counter)++;
+
+	return 0;
+}
+
+void
+feature_info(sqlite3 *db)
+{
+	int counter = 0;
 
 	mvprintw(19, 0, "Installed Features:\n");
-	for (i = 0; features[i]; i++) {
-		if (i > 0 && i % 3 == 0)
-			addch('\n');
-		printw("%25s  [OK]", features[i]);
-	}
+	sqlite3_exec(db, "SELECT * FROM features", &feature_info_callback,
+			&counter, NULL);
 }
 
 void
@@ -248,7 +250,7 @@ load_ui(sqlite3 *db)
 	crew_info(db);
 	cost_info(db);
 	module_info(db);
-	feature_info();
+	feature_info(db);
 	cargo_info();
 	error_info();
 
