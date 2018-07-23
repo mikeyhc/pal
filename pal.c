@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <ctype.h>
 #include <locale.h>
 #include <math.h>
 #include <ncurses.h>
@@ -9,6 +10,9 @@
 #include <unistd.h>
 
 #define TIMEOUT 500
+#define OFFSET  50
+#define MAX_ENTRIES 10
+#define ENTRY_LENGTH 30
 
 typedef struct {
 	char name[30];
@@ -22,6 +26,17 @@ typedef struct {
 	unsigned overhaul_standard;
 	unsigned overhaul_advanced;
 } Costs;
+
+typedef enum {
+	MM_VIEW,
+	MM_EDIT
+} MenuMode;
+
+typedef struct {
+	int curline, curcol;
+	MenuMode mode;
+	char entries[MAX_ENTRIES][ENTRY_LENGTH];
+} MenuInfo;
 
 typedef enum {
 	UI_DEFAULT,
@@ -115,27 +130,26 @@ cost_info_callback(void *vcosts, int cols, char **vals, char **names)
 void
 cost_info(sqlite3 *db)
 {
-	int offset = 50;
 	Costs costs;
 
 	sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'debt.%' "
 			"OR name LIKE 'overhaul.%'", &cost_info_callback,
 			&costs, NULL);
 
-	mvprintw(1, offset, "Ship Costs:");
-	mvprintw(2, offset + 2, "Debt:");
-	mvprintw(3, offset + 4, "Total:  %10d", costs.debt_total);
-	mvprintw(4, offset + 4, "Repaid: %10d (%3d%)", costs.debt_repaid,
+	mvprintw(1, OFFSET, "Ship Costs:");
+	mvprintw(2, OFFSET + 2, "Debt:");
+	mvprintw(3, OFFSET + 4, "Total:  %10d", costs.debt_total);
+	mvprintw(4, OFFSET + 4, "Repaid: %10d (%3d%)", costs.debt_repaid,
 			costs.debt_repaid * 100 / costs.debt_total);
-	mvprintw(5, offset + 4, "Repayments:");
-	mvprintw(6, offset + 6, "Per Cycle:   %8.0f",
+	mvprintw(5, OFFSET + 4, "Repayments:");
+	mvprintw(6, OFFSET + 6, "Per Cycle:   %8.0f",
 			round(costs.debt_total / 20.0));
-	mvprintw(7, offset + 6, "Per Segment: %8.0f",
+	mvprintw(7, OFFSET + 6, "Per Segment: %8.0f",
 			round(costs.debt_total / 180.0));
-	mvprintw(8, offset + 2, "Servicing:");
-	mvprintw(9, offset + 4, "Frontier: %13d", costs.overhaul_frontier);
-	mvprintw(10, offset + 4, "Standard: %13d", costs.overhaul_standard);
-	mvprintw(11, offset + 4, "Advanced: %13d", costs.overhaul_advanced);
+	mvprintw(8, OFFSET + 2, "Servicing:");
+	mvprintw(9, OFFSET + 4, "Frontier: %13d", costs.overhaul_frontier);
+	mvprintw(10, OFFSET + 4, "Standard: %13d", costs.overhaul_standard);
+	mvprintw(11, OFFSET + 4, "Advanced: %13d", costs.overhaul_advanced);
 }
 
 int
@@ -242,13 +256,56 @@ cargo_info(sqlite3 *db)
 void
 error_info()
 {
-	mvprintw(LINES - 2, 0,
-			"+++ ERROR +++ I AM COLD AND ALONE +++ ERROR +++");
+	int i;
+	char *msg = "+++ ERROR +++ I AM COLD AND ALONE +++ ERROR +++";
+	attron(A_REVERSE);
+	mvprintw(LINES - 2, 0, msg);
+	// TODO: this is terrible, think of something better
+	for (i = strlen(msg); i < COLS; i++)
+		addch(' ');
+	attron(A_REVERSE);
+}
+
+void
+render_menu_selected(int y, int x, int i, MenuInfo *menuinfo)
+{
+	if (menuinfo->mode == MM_EDIT) {
+		mvprintw(y, x, menuinfo->entries[i]);
+		attron(A_REVERSE);
+		addch(' ');
+		attroff(A_REVERSE);
+	} else {
+		attron(A_REVERSE);
+		mvprintw(y, x, menuinfo->entries[i]);
+		hline(' ', ENTRY_LENGTH - strlen(menuinfo->entries[i]));
+		attroff(A_REVERSE);
+	}
+}
+
+void
+render_menu(int y, int x, MenuInfo *menuinfo)
+{
+	int i;
+
+	for (i = 0; i < MAX_ENTRIES; i++) {
+		if (i == menuinfo->curline)
+			render_menu_selected(y + i, x, i, menuinfo);
+		else
+			mvprintw(y + i, x, menuinfo->entries[i]);
+	}
+}
+
+void
+battle_info(MenuInfo *menuinfo)
+{
+	mvprintw(1, OFFSET, "Combat Order:");
+	render_menu(2, OFFSET + 2, menuinfo);
 }
 
 void
 load_default_ui(sqlite3 *db)
 {
+	erase();
 	move(0, 0);
 	ship_info(db);
 	crew_info(db);
@@ -257,19 +314,130 @@ load_default_ui(sqlite3 *db)
 	feature_info(db);
 	cargo_info(db);
 	error_info();
-
-	refresh();
 }
 
 void
-load_nav_ui()
+load_battle_ui(sqlite3 *db, MenuInfo *menuinfo)
+{
+	erase();
+	move(0, 0);
+	ship_info(db);
+	crew_info(db);
+	battle_info(menuinfo);
+	module_info(db);
+	feature_info(db);
+	cargo_info(db);
+	error_info();
+}
+
+void
+load_nav_ui(UIType ui)
 {
 	move(LINES - 1, 0);
-	printw(" F1 ");
 	attron(A_REVERSE);
+	printw(" F1 ");
+	if (ui != UI_DEFAULT)
+		attroff(A_REVERSE);
 	printw(" Ship ");
+	if (ui == UI_DEFAULT)
+		attroff(A_REVERSE);
+	addch(' ');
+	attron(A_REVERSE);
+	printw(" F2 ");
+	if (ui != UI_BATTLE)
+		attroff(A_REVERSE);
+	printw(" Battle ");
+	if (ui == UI_BATTLE)
+		attroff(A_REVERSE);
+	addch(' ');
+	attron(A_REVERSE);
+	printw(" F10 ");
 	attroff(A_REVERSE);
+	printw(" Quit ");
+}
 
+void
+menu_update_entry(MenuInfo *menuinfo, char c)
+{
+	if (c == 127 && menuinfo->curcol > 0) {
+		menuinfo->curcol--;
+		menuinfo->entries[menuinfo->curline][menuinfo->curcol] = '\0';
+		return;
+	}
+	if (!isalnum(c))
+		return;
+	if (menuinfo->curcol == ENTRY_LENGTH - 1)
+		return;
+	menuinfo->entries[menuinfo->curline][menuinfo->curcol] = c;
+	menuinfo->curcol++;
+	menuinfo->entries[menuinfo->curline][menuinfo->curcol] = '\0';
+}
+
+void
+menu_move_entry(MenuInfo *menuinfo, int mov)
+{
+	char temp[ENTRY_LENGTH];
+	int oldline = menuinfo->curline;
+	int newline = menuinfo->curline + mov % MAX_ENTRIES;
+	if (newline < 0)
+		newline = MAX_ENTRIES - 1;
+	strcpy(temp, menuinfo->entries[oldline]);
+	strcpy(menuinfo->entries[oldline], menuinfo->entries[newline]);
+	strcpy(menuinfo->entries[newline], temp);
+	menuinfo->curline = newline;
+
+}
+
+void
+menuinfo_initialize(MenuInfo *menuinfo)
+{
+	int i;
+
+	menuinfo->curline = 0;
+	menuinfo->curcol = 0;
+	menuinfo->mode = MM_VIEW;
+	for (i = 0; i < MAX_ENTRIES; i++)
+		menuinfo->entries[i][0] = '\0';
+}
+
+void
+handle_key(int c, MenuInfo *menuinfo)
+{
+	if (menuinfo->mode == MM_EDIT) {
+		if (c == 10)
+			menuinfo->mode = MM_VIEW;
+		else
+			menu_update_entry(menuinfo, c);
+		return;
+	}
+
+	switch (c) {
+	case 'j':
+		menuinfo->curline = (menuinfo->curline + 1) % MAX_ENTRIES;
+		menuinfo->curcol =
+			strlen(menuinfo->entries[menuinfo->curline]);
+		break;
+	case 'k':
+		if (menuinfo->curline == 0)
+			menuinfo->curline = MAX_ENTRIES - 1;
+		else
+			menuinfo->curline = menuinfo->curline - 1;
+		menuinfo->curcol =
+			strlen(menuinfo->entries[menuinfo->curline]);
+		break;
+	case 'J':
+		menu_move_entry(menuinfo, 1);
+		break;
+	case 'K':
+		menu_move_entry(menuinfo, -1);
+		break;
+	case 'C':
+		menuinfo_initialize(menuinfo);
+		break;
+	case 10:
+		menuinfo->mode = MM_EDIT;
+		break;
+	}
 }
 
 int
@@ -277,12 +445,15 @@ main(int argc, char **argv)
 {
 	sqlite3 *db;
 	struct pollfd ufds[1];
+	MenuInfo menuinfo;
 	int running = 1, ready;
-	char c;
-	UIType ui;
+	int c;
+	UIType ui = UI_DEFAULT;
 
 	setlocale(LC_ALL, "");
 	assert(!sqlite3_open("pal.db", &db));
+
+	menuinfo_initialize(&menuinfo);
 
 	ufds[0].fd = STDIN_FILENO;
 	ufds[0].events = POLLIN;
@@ -292,21 +463,25 @@ main(int argc, char **argv)
 	keypad(stdscr, 1);
 
 	load_default_ui(db);
-	load_nav_ui();
+	load_nav_ui(ui);
+	refresh();
 	while (1) {
 		assert(poll(ufds, 1, TIMEOUT) >= 0);
 		if (ufds[0].revents & POLLIN) {
-			read(STDIN_FILENO, &c, 1);
-			mvprintw(LINES - 2, 0, "got char %c\n", c);
+			c =  getch();
 			switch (c) {
-			case 'q':
+			case KEY_F(10):
 				goto END;
 				break;
-			case 'b':
+			case KEY_F(1):
+				ui = UI_DEFAULT;
+				break;
+			case KEY_F(2):
 				ui = UI_BATTLE;
 				break;
-			case 's':
-				ui = UI_DEFAULT;
+			default:
+				if (ui == UI_BATTLE)
+					handle_key(c, &menuinfo);
 				break;
 			}
 		}
@@ -316,11 +491,11 @@ main(int argc, char **argv)
 			load_default_ui(db);
 			break;
 		case UI_BATTLE:
-			/* TODO: create a battle UI */
-			load_default_ui(db);
+			load_battle_ui(db, &menuinfo);
 			break;
 		}
-		load_nav_ui();
+		load_nav_ui(ui);
+		refresh();
 	}
 
 END:
