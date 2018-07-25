@@ -15,8 +15,13 @@
 #define ENTRY_LENGTH 30
 
 typedef struct {
+	int max, current;
+} Bar;
+
+typedef struct {
 	char name[30];
 	char status[16];
+	Bar hull, energy;
 } Ship;
 
 typedef struct {
@@ -43,18 +48,18 @@ typedef enum {
 	UI_BATTLE
 } UIType;
 
-void render_bar(char *name, int current, int total)
+void render_bar(char *name, Bar *bar)
 {
 	int i;
 
 	printw("%7s [", name);
 	attron(A_REVERSE);
-	for (i = 0; i < current * 2; i++)
+	for (i = 0; i < bar->current * 2; i++)
 		addch(' ');
 	attroff(A_REVERSE);
-	for (i = 0; i < (total - current) * 2; i++)
+	for (i = 0; i < (bar->max- bar->current) * 2; i++)
 		addch(' ');
-	printw("] (%d/%d)", current, total);
+	printw("] (%d/%d)", bar->current, bar->max);
 }
 
 void
@@ -70,19 +75,41 @@ ship_info_callback(void *vship, int cols,  char **vals, char **names)
 {
 	int v;
 	Ship *ship = vship;
+	Bar b;
 
 	if (!strcmp(vals[0], "ship.hull")) {
-		move(2, 0);
 		v = atoi(vals[1]);
-		render_bar("Hull", v, v);
+		ship->hull.max = v;
+		if (ship->hull.max >= 0 && ship->hull.current >= 0) {
+			move(2, 0);
+			render_bar("Hull", &ship->hull);
+		}
+	} else if (!strcmp(vals[0], "ship.current_hull")) {
+		v = atoi(vals[1]);
+		ship->hull.current = v;
+		if (ship->hull.max >= 0 && ship->hull.current >= 0) {
+			move(2, 0);
+			render_bar("Hull", &ship->hull);
+		}
 	} else if (!strcmp(vals[0], "ship.energy")) {
-		move(3, 0);
 		v = atoi(vals[1]);
-		render_bar("Energy", v, v);
+		ship->energy.max = v;
+		if (ship->energy.max >= 0 && ship->energy.current >= 0) {
+			move(3, 0);
+			render_bar("Hull", &ship->energy);
+		}
+	} else if (!strcmp(vals[0], "ship.current_energy")) {
+		v = atoi(vals[1]);
+		ship->energy.current = v;
+		if (ship->energy.max >= 0 && &ship->energy.current >= 0) {
+			move(3, 0);
+			render_bar("Hull", &ship->energy);
+		}
 	} else if (!strcmp(vals[0], "ship.armor")) {
 		move(4, 0);
 		v = atoi(vals[1]);
-		render_bar("Armor", v, v);
+		b.current = b.max = v;
+		render_bar("Armor", &b);
 	} else if (!strcmp(vals[0], "ship.name")) {
 		strncpy(ship->name, vals[1], 29);
 		ship_name_render(ship);
@@ -101,6 +128,8 @@ ship_info(sqlite3 *db)
 
 	ship.name[0] = '\0';
 	ship.status[0] = '\0';
+	ship.hull.max = ship.hull.current = -1;
+	ship.energy.max = ship.energy.current = -1;
 	sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'ship.%'",
 			&ship_info_callback, &ship, NULL);
 }
@@ -176,11 +205,17 @@ crew_info(sqlite3 *db)
 int
 module_info_callback(void *vcounter, int cols, char **vals, char **names)
 {
-	int *counter = vcounter;
-	if (*counter > 0 && *counter % 3 == 0)
+	int *counters = vcounter;
+	if (*counters > 0 && *counters % 3 == 0)
 		addch('\n');
+	if (!strcmp(vals[1], "EE"))
+		attron(COLOR_PAIR(1));
+	else
+		counters[1]++;
 	printw("%25s  [%s]", vals[0], vals[1]);
-	(*counter)++;
+	if (!strcmp(vals[1], "EE"))
+		attroff(COLOR_PAIR(1));
+	(*counters)++;
 
 	return 0;
 }
@@ -188,25 +223,25 @@ module_info_callback(void *vcounter, int cols, char **vals, char **names)
 int
 module_info_header(void *vcounter, int cols, char **vals, char **names)
 {
-	int *counter = vcounter;
+	int *counters = vcounter;
 	int max_modules = atoi(vals[0]);
 
-	mvprintw(13, 0, "Installed Modules (%d free):\n",
-			max_modules - *counter);
+	mvprintw(13, 0, "Installed Modules (%d free, %d enabled):\n",
+			max_modules - *counters, counters[1]);
 	return 0;
 }
 
 void
 module_info(sqlite3 *db)
 {
-	int counter = 0;
+	int counters[] = { 0, 0 };
 
 	move(14, 0);
 	sqlite3_exec(db, "SELECT * FROM modules", &module_info_callback,
-			&counter, NULL);
+			counters, NULL);
 	sqlite3_exec(db, "SELECT value FROM properties "
 			"WHERE name = 'ship.max_modules'", &module_info_header,
-			&counter, NULL);
+			counters, NULL);
 }
 
 int
@@ -257,7 +292,8 @@ void
 error_info()
 {
 	int i;
-	char *msg = "+++ ERROR +++ I AM COLD AND ALONE +++ ERROR +++";
+	char *msg = "+++ ERROR +++ I have accidently seen spoilers for "
+		"the next episode ;-; +++ ERROR +++";
 	attron(A_REVERSE);
 	mvprintw(LINES - 2, 0, msg);
 	// TODO: this is terrible, think of something better
@@ -364,7 +400,7 @@ menu_update_entry(MenuInfo *menuinfo, char c)
 		menuinfo->entries[menuinfo->curline][menuinfo->curcol] = '\0';
 		return;
 	}
-	if (!isalnum(c))
+	if (!isalnum(c) && c != ' ')
 		return;
 	if (menuinfo->curcol == ENTRY_LENGTH - 1)
 		return;
@@ -447,7 +483,7 @@ main(int argc, char **argv)
 	struct pollfd ufds[1];
 	MenuInfo menuinfo;
 	int running = 1, ready;
-	int c;
+	int c, failcount = 0;
 	UIType ui = UI_DEFAULT;
 
 	setlocale(LC_ALL, "");
@@ -460,13 +496,20 @@ main(int argc, char **argv)
 
 	initscr();
 	cbreak();
+	start_color();
+	init_pair(1, COLOR_RED, COLOR_BLACK);
 	keypad(stdscr, 1);
 
 	load_default_ui(db);
 	load_nav_ui(ui);
 	refresh();
 	while (1) {
-		assert(poll(ufds, 1, TIMEOUT) >= 0);
+		if (poll(ufds, 1, TIMEOUT) < 0) {
+			if (failcount == 5)
+				assert(0);
+			continue;
+		}
+		failcount = 0;
 		if (ufds[0].revents & POLLIN) {
 			c =  getch();
 			switch (c) {
