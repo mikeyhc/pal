@@ -48,6 +48,11 @@ typedef enum {
 	UI_BATTLE
 } UIType;
 
+typedef struct {
+	int counters[2];
+	int x, y;
+} TableBuilder;
+
 void render_bar(char *name, Bar *bar)
 {
 	int i;
@@ -160,6 +165,9 @@ void
 cost_info(sqlite3 *db)
 {
 	Costs costs;
+	int repayment_percent;
+	float repayment_points;
+	char *msg = "Repaid";
 
 	sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'debt.%' "
 			"OR name LIKE 'overhaul.%'", &cost_info_callback,
@@ -168,8 +176,9 @@ cost_info(sqlite3 *db)
 	mvprintw(1, OFFSET, "Ship Costs:");
 	mvprintw(2, OFFSET + 2, "Debt:");
 	mvprintw(3, OFFSET + 4, "Total:  %10d", costs.debt_total);
+	repayment_percent = costs.debt_repaid * 100 / costs.debt_total;
 	mvprintw(4, OFFSET + 4, "Repaid: %10d (%3d%)", costs.debt_repaid,
-			costs.debt_repaid * 100 / costs.debt_total);
+			repayment_percent);
 	mvprintw(5, OFFSET + 4, "Repayments:");
 	mvprintw(6, OFFSET + 6, "Per Cycle:   %8.0f",
 			round(costs.debt_total / 20.0));
@@ -179,6 +188,13 @@ cost_info(sqlite3 *db)
 	mvprintw(9, OFFSET + 4, "Frontier: %13d", costs.overhaul_frontier);
 	mvprintw(10, OFFSET + 4, "Standard: %13d", costs.overhaul_standard);
 	mvprintw(11, OFFSET + 4, "Advanced: %13d", costs.overhaul_advanced);
+
+	repayment_points = repayment_percent / (100.0 / (LINES - 3));
+	mvprintw(LINES - 3, COLS - strlen(msg), msg);
+	attron(A_REVERSE);
+	mvvline(LINES - 3 - repayment_points, COLS - 1, ' ',
+			(int)round(repayment_points));
+	attroff(A_REVERSE);
 }
 
 int
@@ -203,19 +219,22 @@ crew_info(sqlite3 *db)
 }
 
 int
-module_info_callback(void *vcounter, int cols, char **vals, char **names)
+module_info_callback(void *vbuilder, int cols, char **vals, char **names)
 {
-	int *counters = vcounter;
-	if (*counters > 0 && *counters % 3 == 0)
-		addch('\n');
+	TableBuilder *builder = vbuilder;
+	if (builder->counters[0] > 0 && builder->counters[0] % 3 == 0) {
+		builder->y++;
+		builder->x = 0;
+	}
 	if (!strcmp(vals[1], "EE"))
 		attron(COLOR_PAIR(1));
 	else
-		counters[1]++;
-	printw("%25s  [%s]", vals[0], vals[1]);
+		builder->counters[1]++;
+	mvprintw(builder->y, builder->x, "%25s  [%s]", vals[0], vals[1]);
+	builder->x += 31;
 	if (!strcmp(vals[1], "EE"))
 		attroff(COLOR_PAIR(1));
-	(*counters)++;
+	builder->counters[0]++;
 
 	return 0;
 }
@@ -226,7 +245,7 @@ module_info_header(void *vcounter, int cols, char **vals, char **names)
 	int *counters = vcounter;
 	int max_modules = atoi(vals[0]);
 
-	mvprintw(13, 0, "Installed Modules (%d free, %d enabled):\n",
+	mvprintw(13, 0, "Installed Modules (%d free, %d enabled):",
 			max_modules - *counters, counters[1]);
 	return 0;
 }
@@ -234,24 +253,26 @@ module_info_header(void *vcounter, int cols, char **vals, char **names)
 void
 module_info(sqlite3 *db)
 {
-	int counters[] = { 0, 0 };
+	TableBuilder builder = { {0, 0}, 0, 14 };
 
-	move(14, 0);
 	sqlite3_exec(db, "SELECT * FROM modules", &module_info_callback,
-			counters, NULL);
+			&builder, NULL);
 	sqlite3_exec(db, "SELECT value FROM properties "
 			"WHERE name = 'ship.max_modules'", &module_info_header,
-			counters, NULL);
+			&builder, NULL);
 }
 
 int
-feature_info_callback(void *vcounter, int cols, char **vals, char **names)
+feature_info_callback(void *vbuilder, int cols, char **vals, char **names)
 {
-	int *counter = vcounter;
-	if (*counter > 0 && *counter % 3 == 0)
-		addch('\n');
-	printw("%25s  [%s]", vals[0], vals[1]);
-	(*counter)++;
+	TableBuilder *builder= vbuilder;
+	if (builder->counters[0] > 0 && builder->counters[0] % 3 == 0) {
+		builder->y++;
+		builder->x = 0;
+	}
+	mvprintw(builder->y, builder->x, "%25s  [%s]", vals[0], vals[1]);
+	builder->x += 36;
+	builder->counters[0]++;
 
 	return 0;
 }
@@ -259,21 +280,24 @@ feature_info_callback(void *vcounter, int cols, char **vals, char **names)
 void
 feature_info(sqlite3 *db)
 {
-	int counter = 0;
+	TableBuilder builder = { {0}, 0, 20 };
 
-	mvprintw(19, 0, "Installed Features:\n");
+	mvprintw(19, 0, "Installed Features:");
 	sqlite3_exec(db, "SELECT * FROM features", &feature_info_callback,
-			&counter, NULL);
+			&builder, NULL);
 }
 
 int
-cargo_info_callback(void *vcounter, int cols, char **vals, char **names)
+cargo_info_callback(void *vbuilder, int cols, char **vals, char **names)
 {
-	int *counter = vcounter;
-	if (*counter > 0 && *counter % 3 == 0)
-		addch('\n');
-	printw("%25s  [%2s]", vals[0], vals[1]);
-	(*counter)++;
+	TableBuilder *builder = vbuilder;
+	if (builder->counters[0] > 0 && builder->counters[0] % 3 == 0) {
+		builder->y++;
+		builder->x = 0;
+	}
+	mvprintw(builder->y, builder->x, "%25s  [%2s]", vals[0], vals[1]);
+	builder->x += 36;
+	builder->counters[0]++;
 
 	return 0;
 }
@@ -281,11 +305,11 @@ cargo_info_callback(void *vcounter, int cols, char **vals, char **names)
 void
 cargo_info(sqlite3 *db)
 {
-	int counter = 0;
+	TableBuilder builder = { {0}, 0, 23 };
 
-	mvprintw(22, 0, "Cargo Contents:\n");
+	mvprintw(22, 0, "Cargo Contents:");
 	sqlite3_exec(db, "SELECT * FROM cargo", &cargo_info_callback,
-			&counter, NULL);
+			&builder, NULL);
 }
 
 void
