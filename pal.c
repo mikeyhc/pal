@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sqlite3.h>
 #include <unistd.h>
+#include <zmq.h>
 
 #define TIMEOUT 500
 #define OFFSET  50
@@ -85,7 +86,13 @@ ship_name_render(WINDOW *w, Ship *ship)
 {
 	if (ship->name[0] == '\0' || ship->status[0] == '\0')
 		return;
-	mvwprintw(w, 0, 0, "%s  [%s]", ship->name, ship->status);
+	mvwprintw(w, 0, 0, "%s  [", ship->name);
+	if (!strcmp(ship->status, "IN COMBAT"))
+		wattron(w, A_BLINK);
+	wprintw(w, ship->status);
+	if (!strcmp(ship->status, "IN COMBAT"))
+		wattroff(w, A_BLINK);
+	wprintw(w, "]");
 }
 
 int
@@ -119,7 +126,7 @@ ship_info_callback(void *vship, int cols,  char **vals, char **names)
 		if (ship_render->ship.energy.max >= 0 &&
 				ship_render->ship.energy.current >= 0) {
 			wmove(w, 3, 0);
-			render_bar("Hull", w, &ship_render->ship.energy);
+			render_bar("Energy", w, &ship_render->ship.energy);
 		}
 	} else if (!strcmp(vals[0], "ship.current_energy")) {
 		v = atoi(vals[1]);
@@ -127,7 +134,7 @@ ship_info_callback(void *vship, int cols,  char **vals, char **names)
 		if (ship_render->ship.energy.max >= 0 &&
 				&ship_render->ship.energy.current >= 0) {
 			wmove(w, 3, 0);
-			render_bar("Hull", w, &ship_render->ship.energy);
+			render_bar("Energy", w, &ship_render->ship.energy);
 		}
 	} else if (!strcmp(vals[0], "ship.armor")) {
 		wmove(w, 4, 0);
@@ -185,7 +192,7 @@ void
 cost_info(sqlite3 *db, WINDOW *w, WINDOW *bw)
 {
 	Costs costs;
-	int repayment_percent, lines;
+	int repayment_percent, lines, cols;
 	float repayment_points;
 	char *msg = "Repaid";
 
@@ -197,7 +204,8 @@ cost_info(sqlite3 *db, WINDOW *w, WINDOW *bw)
 	mvwprintw(w, 1, 2, "Debt:");
 	mvwprintw(w, 2, 4, "Total:  %10d", costs.debt_total);
 	repayment_percent = costs.debt_repaid * 100 / costs.debt_total;
-	repayment_percent = 25;
+	if (costs.debt_repaid > 0 && repayment_percent == 0)
+		repayment_percent = 1;
 	mvwprintw(w, 3, 4, "Repaid: %10d (%3d%)", costs.debt_repaid,
 			repayment_percent);
 	mvwprintw(w, 4,  4, "Repayments:");
@@ -210,11 +218,15 @@ cost_info(sqlite3 *db, WINDOW *w, WINDOW *bw)
 	mvwprintw(w, 9, 4, "Standard: %13d", costs.overhaul_standard);
 	mvwprintw(w, 10, 4, "Advanced: %13d", costs.overhaul_advanced);
 
-	lines = getmaxy(bw);
-	repayment_points = repayment_percent / (100.0 / lines);
-	mvwprintw(bw, lines - 1, 0, msg);
+	getmaxyx(bw, lines, cols);
+	repayment_points = repayment_percent / (100.0 / (lines - 1));
+	if (repayment_percent > 0 && repayment_points < 1)
+		repayment_points = 1.0;
+	mvwprintw(bw, lines - 1, 1, msg);
+	mvwprintw(bw, lines - 2, 3, "0%%");
+	mvwprintw(bw, 0, 1, "100%%");
 	wattron(bw, A_REVERSE);
-	mvwvline(bw, lines - repayment_points, COLS - 1, ' ',
+	mvwvline(bw, lines - repayment_points - 1, cols - 1, ' ',
 			(int)round(repayment_points));
 	wattroff(bw, A_REVERSE);
 	wrefresh(bw);
@@ -256,7 +268,7 @@ module_info_callback(void *vrender, int cols, char **vals, char **names)
 	else
 		builder->counters[1]++;
 	mvwprintw(w, builder->y, builder->x, "%25s  [%s]", vals[0], vals[1]);
-	builder->x += 31;
+	builder->x += 36;
 	if (!strcmp(vals[1], "EE"))
 		wattroff(w, COLOR_PAIR(1));
 	builder->counters[0]++;
@@ -556,7 +568,7 @@ main(int argc, char **argv)
 		{ 20, 40, 0, OFFSET },
 		{ 6, 120, 15, 0 },
 		{ 3, 120, 21, 0 },
-		{ 4, 120, 24, 0 },
+		{ 6, 120, 24, 0 },
 		{ 1, -1, -3, 0 },
 		{ 1, -1, -2, 0 },
 		{ -3, 7, 0, -8},
@@ -624,6 +636,8 @@ main(int argc, char **argv)
 			}
 		}
 
+		for (i = 0; i < MAX_WINDOWS; i++)
+			werase(windows[i]);
 		switch (ui) {
 		case UI_DEFAULT:
 			load_default_ui(db, windows);
