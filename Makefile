@@ -1,4 +1,4 @@
-LDFLAGS=-lncursesw -lm -lsqlite3 -g
+LDFLAGS=-lncursesw -lm -lsqlite3 -lzmq -g
 
 all: pal
 %: %.c
