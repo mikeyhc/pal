@@ -3,7 +3,6 @@
 #include <locale.h>
 #include <math.h>
 #include <ncurses.h>
-#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
@@ -556,8 +555,11 @@ handle_key(int c, MenuInfo *menuinfo)
 int
 main(int argc, char **argv)
 {
+	void *context;
 	sqlite3 *db;
-	struct pollfd ufds[1];
+	zmq_pollitem_t items[] = {
+		{ 0, STDIN_FILENO, ZMQ_POLLIN, 0 }
+	};
 	MenuInfo menuinfo;
 	int running = 1, ready;
 	int i, c, failcount = 0;
@@ -576,12 +578,10 @@ main(int argc, char **argv)
 	WINDOW *windows[MAX_WINDOWS];
 
 	setlocale(LC_ALL, "");
+	context = zmq_ctx_new();
 	assert(!sqlite3_open("pal.db", &db));
 
 	menuinfo_initialize(&menuinfo);
-
-	ufds[0].fd = STDIN_FILENO;
-	ufds[0].events = POLLIN;
 
 	initscr();
 	cbreak();
@@ -611,13 +611,14 @@ main(int argc, char **argv)
 	}
 
 	while (1) {
-		if (poll(ufds, 1, TIMEOUT) < 0) {
+		if (zmq_poll(items, 1, TIMEOUT) < 0) {
 			if (failcount == 5)
 				assert(0);
 			continue;
 		}
 		failcount = 0;
-		if (ufds[0].revents & POLLIN) {
+
+		if (items[0].revents & ZMQ_POLLIN) {
 			c =  getch();
 			switch (c) {
 			case KEY_F(10):
@@ -654,5 +655,6 @@ main(int argc, char **argv)
 END:
 	endwin();
 	sqlite3_close(db);
+	zmq_ctx_destroy(context);
 	return 0;
 }
