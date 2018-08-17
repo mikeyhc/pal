@@ -1,8 +1,9 @@
 LDFLAGS=-lncursesw -lm -lsqlite3 -lzmq -g
+CFLAGS=-Wall -Wextra -pedantic
 
-all: pal
+all: pal pald
 %: %.c
-	${CC} -o $@ $^ ${LDFLAGS}
+	${CC} ${CFLAGS} -o $@ $^ ${LDFLAGS}
 clean:
 	rm -f pal
 
