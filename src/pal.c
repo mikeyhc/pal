@@ -5,16 +5,14 @@
 #include <ncurses.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sqlite3.h>
 #include <unistd.h>
+
+#include <sqlite3.h>
 #include <zmq.h>
 
-#include <sys/ioctl.h>
-#include <netinet/in.h>
-#include <net/if.h>
-#include <arpa/inet.h>
+#include "pal.h"
 
-#define TIMEOUT 500
+#define TIMEOUT 2000
 #define OFFSET  50
 #define MAX_ENTRIES 10
 #define ENTRY_LENGTH 30
@@ -26,17 +24,6 @@
 	item.fd = f;				\
 	item.events = e;			\
 	item.revents = 0;
-
-
-typedef struct {
-	int max, current;
-} Bar;
-
-typedef struct {
-	char name[30];
-	char status[16];
-	Bar hull, energy;
-} Ship;
 
 typedef struct {
 	Ship ship;
@@ -64,7 +51,8 @@ typedef struct {
 
 typedef enum {
 	UI_DEFAULT,
-	UI_BATTLE
+	UI_BATTLE,
+	UI_ACCOUNTS
 } UIType;
 
 typedef struct {
@@ -104,84 +92,42 @@ ship_name_render(WINDOW *w, Ship *ship)
 	if (ship->name[0] == '\0' || ship->status[0] == '\0')
 		return;
 	mvwprintw(w, 0, 0, "%s  [", ship->name);
-	if (!strcmp(ship->status, "IN COMBAT"))
+	if (!strcmp(ship->status, "IN COMBAT")
+			|| !strcmp(ship->status, "CRASHED"))
 		wattron(w, A_BLINK);
 	wprintw(w, ship->status);
-	if (!strcmp(ship->status, "IN COMBAT"))
+	if (!strcmp(ship->status, "IN COMBAT")
+			|| !strcmp(ship->status, "CRASHED"))
 		wattroff(w, A_BLINK);
 	wprintw(w, "]");
 }
 
-int
-ship_info_callback(void *vship, int cols,  char **vals, char **names)
+static void
+render_ship(char *buffer, WINDOW *w)
 {
-	int v;
-	ShipInfoRender *ship_render = vship;
-	WINDOW *w;
-	Bar b;
+	Ship ship;
+	int pos = 0;
 
-	(void)cols; /* supress warning */
-	(void)names; /*supress warning */
-	w = ship_render->window;
-	if (!strcmp(vals[0], "ship.hull")) {
-		v = atoi(vals[1]);
-		ship_render->ship.hull.max = v;
-		if (ship_render->ship.hull.max >= 0 &&
-				ship_render->ship.hull.current >= 0) {
-			wmove(w, 2, 0);
-			render_bar("Hull", w, &ship_render->ship.hull);
-		}
-	} else if (!strcmp(vals[0], "ship.current_hull")) {
-		v = atoi(vals[1]);
-		ship_render->ship.hull.current = v;
-		if (ship_render->ship.hull.max >= 0 &&
-				ship_render->ship.hull.current >= 0) {
-			wmove(w, 2, 0);
-			render_bar("Hull", w, &ship_render->ship.hull);
-		}
-	} else if (!strcmp(vals[0], "ship.energy")) {
-		v = atoi(vals[1]);
-		ship_render->ship.energy.max = v;
-		if (ship_render->ship.energy.max >= 0 &&
-				ship_render->ship.energy.current >= 0) {
-			wmove(w, 3, 0);
-			render_bar("Energy", w, &ship_render->ship.energy);
-		}
-	} else if (!strcmp(vals[0], "ship.current_energy")) {
-		v = atoi(vals[1]);
-		ship_render->ship.energy.current = v;
-		if (ship_render->ship.energy.max >= 0 &&
-				ship_render->ship.energy.current >= 0) {
-			wmove(w, 3, 0);
-			render_bar("Energy", w, &ship_render->ship.energy);
-		}
-	} else if (!strcmp(vals[0], "ship.armor")) {
-		wmove(w, 4, 0);
-		v = atoi(vals[1]);
-		b.current = b.max = v;
-		render_bar("Armor", w, &b);
-	} else if (!strcmp(vals[0], "ship.name")) {
-		strncpy(ship_render->ship.name, vals[1], 29);
-		ship_name_render(w, &ship_render->ship);
-	} else if (!strcmp(vals[0], "ship.status")) {
-		strncpy(ship_render->ship.status, vals[1], 15);
-		ship_name_render(w, &ship_render->ship);
-	}
-	return 0;
-}
+	strncpy(ship.name, buffer, SHIPNAME_LEN);
+	pos += SHIPNAME_LEN;
+	strncpy(ship.status, buffer + pos, SHIPSTATUS_LEN);
+	pos += SHIPSTATUS_LEN;
+	ship.hull.current = buffer[pos++];
+	ship.hull.max = buffer[pos++];
+	ship.energy.current = buffer[pos++];
+	ship.energy.max = buffer[pos++];
+	ship.armor.current = buffer[pos++];
+	ship.armor.max = buffer[pos++];
 
-void
-ship_info(sqlite3 *db, WINDOW *window)
-{
-	ShipInfoRender ship_render;
-
-	ship_render.window = window;
-	ship_render.ship.name[0] = '\0';
-	ship_render.ship.status[0] = '\0';
-	ship_render.ship.hull.max = ship_render.ship.hull.current = -1;
-	ship_render.ship.energy.max = ship_render.ship.energy.current = -1;
-	sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'ship.%'",
-			&ship_info_callback, &ship_render, NULL);
+	werase(w);
+	ship_name_render(w, &ship);
+	wmove(w, 2, 0);
+	render_bar("Hull", w, &ship.hull);
+	wmove(w, 3, 0);
+	render_bar("Energy", w, &ship.energy);
+	wmove(w, 4, 0);
+	render_bar("Armor", w, &ship.armor);
+	wrefresh(w);
 }
 
 int
@@ -216,14 +162,15 @@ cost_info(sqlite3 *db, WINDOW *w, WINDOW *bw)
 	float repayment_points;
 	char *msg = "Repaid";
 
-sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'debt.%' "
+	sqlite3_exec(db, "SELECT * FROM properties WHERE name LIKE 'debt.%' "
 			"OR name LIKE 'overhaul.%'", &cost_info_callback,
 			&costs, NULL);
 
 	mvwprintw(w, 0, 0, "Ship Costs:");
 	mvwprintw(w, 1, 2, "Debt:");
 	mvwprintw(w, 2, 4, "Total:  %10d", costs.debt_total);
-	repayment_percent = costs.debt_repaid * 100 / costs.debt_total;
+	if (costs.debt_total > 0)
+		repayment_percent = costs.debt_repaid * 100 / costs.debt_total;
 	if (costs.debt_repaid > 0 && repayment_percent == 0)
 		repayment_percent = 1;
 	mvwprintw(w, 3, 4, "Repaid: %10d (%3d%)", costs.debt_repaid,
@@ -399,7 +346,7 @@ cargo_info(sqlite3 *db, WINDOW *w)
 }
 
 void
-error_info(WINDOW *w, int c)
+error_info(WINDOW *w)
 {
 	int maxx;
 	char *msg = "+++ ERROR +++ I have accidently seen spoilers for "
@@ -407,8 +354,7 @@ error_info(WINDOW *w, int c)
 	wattron(w, A_REVERSE);
 	mvwprintw(w, 0, 0, msg);
 	maxx = getmaxx(w);
-	whline(w, ' ', maxx - strlen(msg) - 1);
-	mvwprintw(w, 0, maxx - 1, "%d", c);
+	whline(w, ' ', maxx - strlen(msg));
 	wattroff(w, A_REVERSE);
 }
 
@@ -449,41 +395,47 @@ battle_info(MenuInfo *menuinfo, WINDOW *w)
 }
 
 void
-load_default_ui(sqlite3 *db, WINDOW **windows, int c)
+load_default_ui(sqlite3 *db, WINDOW **windows)
 {
-	int i;
-
-	for (i = 0; i < MAX_WINDOWS; i++)
-		werase(windows[i]);
-	ship_info(db, windows[0]);
 	crew_info(db, windows[1]);
 	cost_info(db, windows[2], windows[8]);
 	module_info(db, windows[3]);
 	feature_info(db, windows[4]);
 	cargo_info(db, windows[5]);
-	error_info(windows[6], c);
+	error_info(windows[6]);
 }
 
 void
-load_battle_ui(sqlite3 *db, WINDOW **windows, MenuInfo *menuinfo, int c)
+load_battle_ui(sqlite3 *db, WINDOW **windows, MenuInfo *menuinfo)
 {
-	int i;
-
-	for (i = 0; i < MAX_WINDOWS; i++)
-		werase(windows[i]);
-	ship_info(db, windows[0]);
 	crew_info(db, windows[1]);
 	battle_info(menuinfo, windows[2]);
 	module_info(db, windows[3]);
 	feature_info(db, windows[4]);
 	cargo_info(db, windows[5]);
-	error_info(windows[6], c);
+	error_info(windows[6]);
+}
+
+void
+load_accounts_ui(sqlite3 *db, WINDOW **windows)
+{
+	int i;
+
+	for (i = 1; i < MAX_WINDOWS; i++)
+		werase(windows[i]);
+	crew_info(db, windows[1]);
+	/* account info goes here */
+	module_info(db, windows[3]);
+	feature_info(db, windows[4]);
+	cargo_info(db, windows[5]);
+	error_info(windows[6]);
 }
 
 void
 load_nav_ui(UIType ui, WINDOW *w)
 {
 	wmove(w, 0, 0);
+
 	wattron(w, A_REVERSE);
 	wprintw(w, " F1 ");
 	if (ui != UI_DEFAULT)
@@ -492,6 +444,7 @@ load_nav_ui(UIType ui, WINDOW *w)
 	if (ui == UI_DEFAULT)
 		wattroff(w, A_REVERSE);
 	waddch(w, ' ');
+
 	wattron(w, A_REVERSE);
 	wprintw(w, " F2 ");
 	if (ui != UI_BATTLE)
@@ -499,6 +452,16 @@ load_nav_ui(UIType ui, WINDOW *w)
 	wprintw(w, " Battle ");
 	if (ui == UI_BATTLE)
 		wattroff(w, A_REVERSE);
+	waddch(w, ' ');
+
+	wattron(w, A_REVERSE);
+	wprintw(w, " F3 ");
+	if (ui != UI_ACCOUNTS)
+		wattroff(w, A_REVERSE);
+	wprintw(w, " Accounts ");
+	if (ui == UI_ACCOUNTS)
+		wattroff(w, A_REVERSE);
+
 	waddch(w, ' ');
 	wattron(w, A_REVERSE);
 	wprintw(w, " F10 ");
@@ -595,7 +558,7 @@ main(void)
 {
 	void *context;
 	void *subscriber;
-	char buffer[256];
+	char buffer[SHIP_MESSAGE_LEN];
 	sqlite3 *db;
 	zmq_pollitem_t items[2];
 	MenuInfo menuinfo;
@@ -627,8 +590,10 @@ main(void)
 
 	initscr();
 	cbreak();
+	noecho();
 	start_color();
 	init_pair(1, COLOR_RED, COLOR_BLACK);
+	init_pair(2, COLOR_GREEN, COLOR_BLACK);
 	keypad(stdscr, 1);
 	curs_set(0);
 
@@ -661,8 +626,15 @@ main(void)
 		failcount = 0;
 
 		if (items[1].revents & ZMQ_POLLIN) {
-			zmq_recv(subscriber, buffer, 255, 0);
-			msgcount = (msgcount + 1) % 10000;
+			zmq_recv(subscriber, buffer, SHIP_MESSAGE_LEN, 0);
+			switch (buffer[0]) {
+			case SHIP_UPDATE:
+				wattron(windows[0], COLOR_PAIR(2));
+				render_ship(buffer + 1, windows[0]);
+				wattroff(windows[0], COLOR_PAIR(2));
+				break;
+			}
+			msgcount = (msgcount + 1) % 100;
 		}
 
 		if (items[0].revents & ZMQ_POLLIN) {
@@ -677,6 +649,9 @@ main(void)
 			case KEY_F(2):
 				ui = UI_BATTLE;
 				break;
+			case KEY_F(3):
+				ui = UI_ACCOUNTS;
+				break;
 			default:
 				if (ui == UI_BATTLE)
 					handle_key(c, &menuinfo);
@@ -684,20 +659,26 @@ main(void)
 			}
 		}
 
-		for (i = 0; i < MAX_WINDOWS; i++)
+		for (i = 0; i < MAX_WINDOWS; i++) {
 			werase(windows[i]);
+			wattron(windows[i], COLOR_PAIR(2));
+		}
 		switch (ui) {
 		case UI_DEFAULT:
-			load_default_ui(db, windows, msgcount / 1000);
+			load_default_ui(db, windows);
 			break;
 		case UI_BATTLE:
-			load_battle_ui(db, windows, &menuinfo,
-					msgcount / 1000);
+			load_battle_ui(db, windows, &menuinfo);
+			break;
+		case UI_ACCOUNTS:
+			load_accounts_ui(db, windows);
 			break;
 		}
 		load_nav_ui(ui, windows[7]);
-		for (i = 0; i < MAX_WINDOWS; i++)
+		for (i = 1; i < MAX_WINDOWS; i++) {
+			wattroff(windows[i], COLOR_PAIR(2));
 			wrefresh(windows[i]);
+		}
 	}
 
 END:
