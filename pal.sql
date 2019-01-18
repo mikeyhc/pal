@@ -22,3 +22,8 @@ CREATE TABLE cargo (
         name STRING PRIMARY KEY,
         count NUMBER
 );
+
+CREATE TABLE finance (
+        name STRING,
+        value NUMBER
+);
