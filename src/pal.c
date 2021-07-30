@@ -491,7 +491,7 @@ menu_move_entry(MenuInfo *menuinfo, int mov)
 {
 	char temp[ENTRY_LENGTH];
 	int oldline = menuinfo->curline;
-	int newline = menuinfo->curline + mov % MAX_ENTRIES;
+	int newline = (menuinfo->curline + mov) % MAX_ENTRIES;
 	if (newline < 0)
 		newline = MAX_ENTRIES - 1;
 	strcpy(temp, menuinfo->entries[oldline]);
